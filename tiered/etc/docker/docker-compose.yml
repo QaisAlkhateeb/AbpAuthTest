@@ -1,0 +1,142 @@
+version: '3.7'
+
+services:
+  todoapp-web:
+    image: mycompanyname/todoapp-web:latest
+    container_name: todoapp-web
+    hostname: todoapp-web
+    build:
+      context: ../../
+      dockerfile: src/TodoApp.Web/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=91f91912-5ab0-49df-8166-23377efaf3cc
+      - App__SelfUrl=https://localhost:44353
+      - AuthServer__RequireHttpsMetadata=false
+      - AuthServer__IsContainerizedOnLocalhost=true
+      - AuthServer__Authority=https://localhost:44334/
+      - RemoteServices__Default__BaseUrl=http://todoapp-api
+      - RemoteServices__AbpAccountPublic__BaseUrl=http://todoapp-authserver
+      - AuthServer__MetaAddress=http://todoapp-authserver
+      - Redis__Configuration=redis
+    ports:
+      - "44353:443"
+    depends_on:
+      - todoapp-api
+    restart: on-failure
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+
+  todoapp-api:
+    image: mycompanyname/todoapp-api:latest
+    container_name: todoapp-api
+    hostname: todoapp-api
+    build:
+      context: ../../
+      dockerfile: src/TodoApp.HttpApi.Host/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=91f91912-5ab0-49df-8166-23377efaf3cc
+      - App__SelfUrl=https://localhost:44354
+      - App__HealthCheckUrl=http://todoapp-api/health-status
+      - AuthServer__RequireHttpsMetadata=false
+      - AuthServer__Authority=http://todoapp-authserver
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=TodoApp;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+      - Redis__Configuration=redis
+    ports:
+      - "44354:443"
+    depends_on:
+      sql-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+  
+  todoapp-authserver:
+    image: mycompanyname/todoapp-authserver:latest
+    container_name: todoapp-authserver
+    build:
+      context: ../../
+      dockerfile: src/TodoApp.AuthServer/Dockerfile.local
+    environment:
+      - ASPNETCORE_URLS=https://+:443;http://+:80;
+      - App__SelfUrl=https://localhost:44334
+      - App__CorsOrigins=https://localhost:44353,https://localhost:44354
+      - AuthServer__RequireHttpsMetadata=false
+      - AuthServer__Authority=http://todoapp-authserver
+      - Kestrel__Certificates__Default__Path=/root/certificate/localhost.pfx
+      - Kestrel__Certificates__Default__Password=91f91912-5ab0-49df-8166-23377efaf3cc
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=TodoApp;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+      - Redis__Configuration=redis
+    ports:
+      - "44334:443"
+    depends_on:
+      sql-server:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    volumes:
+      - ./certs:/root/certificate
+    networks:
+      - abp-network
+
+  
+  db-migrator:
+    image: mycompanyname/todoapp-db-migrator:latest
+    container_name: db-migrator
+    build:
+      context: ../../
+      dockerfile: src/TodoApp.DbMigrator/Dockerfile.local
+    environment:
+      - OpenIddict__Applications__TodoApp_Web__RootUrl=https://localhost:44353
+      - OpenIddict__Applications__TodoApp_Swagger__RootUrl=https://localhost:44354
+      - ConnectionStrings__Default=Data Source=sql-server;Initial Catalog=TodoApp;User Id=sa;Password=myPassw0rd;MultipleActiveResultSets=true;TrustServerCertificate=True;
+    depends_on:
+      sql-server:
+        condition: service_healthy
+    networks:
+      - abp-network
+  
+  sql-server:
+    container_name: sql-server
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    ports:
+      - "1434:1433"
+    environment:
+      SA_PASSWORD: "myPassw0rd"
+      ACCEPT_EULA: "Y"
+    volumes:
+      - sqldata:/var/opt/mssql
+    networks:
+      - abp-network
+    healthcheck:
+      test: /opt/mssql-tools/bin/sqlcmd -S sql-server -U sa -P "myPassw0rd" -Q "SELECT 1" -b -o /dev/null
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+  redis:
+    container_name: redis
+    image: redis:alpine
+    ports:
+      - "6379:6379"
+    networks:
+      - abp-network
+    healthcheck:
+      test: ["CMD", "redis-cli","ping"]
+volumes:
+  sqldata:
+    name: todoapp_sqldata
+networks:
+  abp-network:
+    name: todoapp-network
+    driver: bridge
